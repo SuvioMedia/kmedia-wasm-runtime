@@ -1,0 +1,18 @@
+{
+  "abiVersion": 4,
+  "ffmpegVersion": "9.0.1",
+  "wasmSha256": "74835ce43cd31037a581b3cda2aa5542aa89685c9d074fae4d6722cb9521bdc5",
+  "features": [
+    "demux",
+    "software-video-rgba-yuv",
+    "vc1-software-decode",
+    "wmv3-wmav2-software-decode",
+    "wmapro-software-decode",
+    "wasm-simd128",
+    "software-audio-planar-batch",
+    "subtitle-text-bitmap",
+    "decoder-flush-skip",
+    "thumbnail",
+    "signalsmith-stretch"
+  ]
+}
