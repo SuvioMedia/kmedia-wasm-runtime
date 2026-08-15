@@ -394,6 +394,10 @@ tasks.named('check') {
     )
 }
 
+configurations.named('default') {
+    outgoing.artifact(runtimeArchive)
+}
+
 publishing {
     repositories {
         maven {
