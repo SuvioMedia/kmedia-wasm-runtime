@@ -14,7 +14,7 @@ reject a mismatched ABI before playback.
 Only the three files above are tracked in `cdn/chunks/` and enter the
 runtime-assets ZIP. There is no standalone JavaScript application bundle.
 
-The complete native-shim source, exact upstream source archives, notices,
-third-party licenses, build recipe, and relinking instructions are part of the
-same Git tag and Maven `-sources.jar`. No proprietary player code is linked
-into this runtime payload.
+Complete FFmpeg source, the native object files and dav1d SDK needed for
+relinking, notices, third-party licenses, and the exact build recipe are part
+of the same Git tag and Maven `-sources.jar`. Native shim, Signalsmith, Kotlin,
+and application source are not published.
