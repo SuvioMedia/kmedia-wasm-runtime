@@ -1,46 +1,64 @@
 # FFmpeg/WebAssembly source and relinking
 
 The `io.github.shusek:kmedia-wasm-engine-runtime-assets` Maven artifact contains
-`kmedia-wasm-runtime/kmedia-wasm.wasm` and its Emscripten loader. The WebAssembly binary combines
-the open native C/C++ shim with FFmpeg libraries configured under LGPL-2.1-or-later. GPL and
-non-free FFmpeg components are not enabled. No proprietary player code is linked into this native
-WebAssembly binary.
+`kmedia-wasm-runtime/kmedia-wasm.wasm` and its Emscripten loader. The WebAssembly
+binary statically combines FFmpeg libraries configured as LGPL-2.1-or-later
+with a non-LGPL work. GPL and non-free FFmpeg components are not enabled.
 
-Every runtime version publishes its corresponding source and relinking materials as the durable
-Maven Central classifier
-`io.github.shusek:kmedia-wasm-engine-runtime-assets:<version>:sources@jar`. It contains:
+LGPL-2.1 section 6(a) permits that non-LGPL work to be supplied as object code
+rather than source, provided recipients can modify FFmpeg and relink a working
+executable. Accordingly, every runtime version publishes this minimal kit in
+the durable Maven Central classifier
+`io.github.shusek:kmedia-wasm-engine-runtime-assets:<version>:sources@jar`:
 
-- `wasm/` — the open native C/C++ shim and JavaScript I/O library;
-- `third-party-sources/ffmpeg-9.0.1.tar.gz` — exact FFmpeg commit
-  `bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa`;
-- `third-party-sources/dav1d-1.5.3.tar.gz` — exact dav1d commit
-  `b546257f770768b2c88258c533da38b91a06f737`;
-- `third-party-sources.properties` — archive origins, commits, and SHA-256 values;
-- `docker/Dockerfile` — Emscripten 6.0.4 pinned to a multi-architecture image digest;
-- `docker/build-ffmpeg.sh` — the complete configure, compile, export, and link commands;
-- the applicable notices and full LGPL 2.1 license text.
+- `third-party-sources/ffmpeg-9.0.1.tar.gz` — complete, unmodified source for
+  exact FFmpeg commit `bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa`;
+- `relink/objects/*.o` — the complete machine-readable work that uses FFmpeg;
+- `relink/dav1d/` — the exact prebuilt BSD-2-Clause dav1d library and public
+  headers used by the FFmpeg build;
+- `relink/SHA256SUMS` and `third-party-sources.properties` — pinned inputs;
+- `docker/Dockerfile` and `docker/build-ffmpeg.sh` — the complete FFmpeg
+  configure, compile, and final-link recipe using Emscripten 6.0.4;
+- `RELINKING_TERMS.md`, notices, and all applicable license texts.
 
-Download and extract that sources JAR, then run from its root:
+Native shim, Signalsmith, Kotlin, and TypeScript source are deliberately not
+part of this kit. The object-code permission in `RELINKING_TERMS.md` allows the
+modification and reverse engineering needed for a recipient's own relinking
+and debugging, while all inherited and third-party rights remain intact.
+
+## Reproduce the distributed binary
+
+Download and extract the sources JAR, then run from its root:
 
 ```shell
-./gradlew verifyThirdPartySources
+echo "fb1931fd4eb29297ee1c1017a24f800c4d8fbea35b4f2aaeb28308a48a9149b4  third-party-sources/ffmpeg-9.0.1.tar.gz" | sha256sum -c -
+(cd relink && sha256sum -c SHA256SUMS)
 mkdir -p dist/wasm
-docker build --file docker/Dockerfile --tag kmedia-wasm-runtime-build .
-docker run --rm --volume "$PWD:/src" kmedia-wasm-runtime-build
+docker build --file docker/Dockerfile --tag kmedia-wasm-runtime-relink .
+docker run --rm --volume "$PWD:/src" kmedia-wasm-runtime-relink
 ```
 
-The native build produces `dist/wasm/kmedia-wasm.js` and `dist/wasm/kmedia-wasm.wasm`. To prepare a
-new runtime release, copy those outputs to `cdn/chunks/kmedia-wasm.js` and
-`cdn/chunks/kmedia-wasm.wasm`, update `cdn/chunks/kmedia-wasm-runtime.json` with the exact FFmpeg
-version and Wasm SHA-256, refresh their entries in `cdn/SHA256SUMS`, and run:
+The output is `dist/wasm/kmedia-wasm.js` and
+`dist/wasm/kmedia-wasm.wasm`. Its checksums must match `cdn/SHA256SUMS`.
+
+## Relink a modified FFmpeg
+
+Extract `third-party-sources/ffmpeg-9.0.1.tar.gz` to a writable directory,
+make the desired changes, and mount that directory over `/opt/FFmpeg`:
 
 ```shell
-./gradlew check runtimeArchive
+mkdir modified-ffmpeg
+tar -xzf third-party-sources/ffmpeg-9.0.1.tar.gz \
+  --strip-components=1 --directory modified-ffmpeg
+docker build --file docker/Dockerfile --tag kmedia-wasm-runtime-relink .
+docker run --rm \
+  --env FORCE_FFMPEG=true \
+  --volume "$PWD:/src" \
+  --volume "$PWD/modified-ffmpeg:/opt/FFmpeg" \
+  kmedia-wasm-runtime-relink
 ```
 
-Gradle verifies the pinned bytes and the complete corresponding-source classifier before creating
-the Maven ZIP. The source JAR is published beside that ZIP and remains available from Maven
-Central. The same materials are retained in this public repository and its immutable release tag.
-
-FFmpeg licensing information is at `https://ffmpeg.org/legal.html`. Nothing in this document
-changes the terms of LGPL-2.1-or-later or any other included license.
+The same script rebuilds the modified LGPL libraries and combines them with
+the supplied object files to produce a modified runtime. FFmpeg licensing
+information is at `https://ffmpeg.org/legal.html`. Nothing in this document
+changes LGPL-2.1-or-later or any other included license.

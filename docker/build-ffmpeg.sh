@@ -1,60 +1,16 @@
 #!/bin/bash
 set -e
 
-DAV1D_SRC=/opt/dav1d
-DAV1D_PREFIX=/src/dist/dav1d
+DAV1D_PREFIX=/src/relink/dav1d
+OBJDIR=/src/relink/objects
 
-# Build dav1d for WASM (software AV1 decoder)
-if [ -z "$FORCE_DAV1D" ] && [ -f "${DAV1D_PREFIX}/lib/libdav1d.a" ]; then
-    echo "=== dav1d library found, skipping build (set FORCE_DAV1D=true to rebuild) ==="
-else
-    echo "=== Building dav1d for WASM ==="
-    
-    cd ${DAV1D_SRC}
-    
-    # Clean previous build
-    rm -rf build || true
-    
-    # Create Emscripten cross-file for meson
-    cat > /tmp/emscripten.txt << 'EOF'
-[binaries]
-c = 'emcc'
-cpp = 'em++'
-ar = 'emar'
-strip = 'emstrip'
-[built-in options]
-c_args = ['-O3', '-flto', '-msimd128', '-D_FILE_OFFSET_BITS=64']
-c_link_args = ['-O3', '-flto', '-msimd128']
-[host_machine]
-system = 'emscripten'
-cpu_family = 'wasm32'
-cpu = 'wasm32'
-endian = 'little'
-EOF
-
-    # Configure dav1d for WASM
-    meson setup build \
-        --prefix=${DAV1D_PREFIX} \
-        --cross-file=/tmp/emscripten.txt \
-        --default-library=static \
-        --buildtype=release \
-        -Denable_asm=false \
-        -Denable_tools=false \
-        -Denable_tests=false \
-        -Denable_examples=false
-    
-    echo "=== Compiling dav1d ==="
-    ninja -C build
-    
-    echo "=== Installing dav1d ==="
-    ninja -C build install
-
-    # Strip PTHREADS flags from dav1d pkg-config — dav1d auto-enables threads
-    # for Emscripten but our WASM build uses USE_PTHREADS=0, causing FFmpeg
-    # configure to fail on conflicting flags.
-    sed -i 's/-s USE_PTHREADS=[0-9]*//g; s/-s PTHREAD_POOL_SIZE=[0-9]*//g' \
-        "${DAV1D_PREFIX}/lib/pkgconfig/dav1d.pc"
-fi
+# dav1d is BSD-2-Clause and the native shim is Apache/MIT-derived, so their
+# source is kept private.  LGPL-2.1 section 6(a) permits the work using FFmpeg
+# to be supplied as machine-readable object code.  These are the exact inputs
+# used for the distributed runtime.
+test -f "${DAV1D_PREFIX}/lib/libdav1d.a"
+test -f "${DAV1D_PREFIX}/lib/pkgconfig/dav1d.pc"
+test -f "${OBJDIR}/movi.o"
 
 ls -R /src/dist/ffmpeg/lib || echo "Directory not found"
 if [ -z "$FORCE_FFMPEG" ] && [ -f "/src/dist/ffmpeg/lib/libavformat.a" ]; then
@@ -148,34 +104,8 @@ mkdir -p /src/dist/wasm
 #   -s SUPPORT_LONGJMP=0: Disable longjmp/setjmp support
 #   -s SUPPORT_ERRNO=0: Disable errno support
 #   -s ASYNCIFY_STACK_SIZE=524288: Reduce asyncify stack from 1MB to 512KB
-# Compile C files with emcc (preserves C semantics) and C++ files with em++,
-# then link everything via em++ so the C++ runtime gets pulled in for the
-# Signalsmith Stretch wrapper. em++ on .c files defaults them to C++ which
-# breaks the existing FFmpeg-side code (EM_JS extern "C" mismatches, implicit
-# void* casts), so a single-step build doesn't work.
-OBJDIR=/tmp/movi-objs
-rm -rf "$OBJDIR"
-mkdir -p "$OBJDIR"
-
-C_COMMON_FLAGS=(
-    -I/src/dist/ffmpeg/include
-    -I${DAV1D_PREFIX}/include
-    -O3 -flto -msimd128 -D_FILE_OFFSET_BITS=64
-)
-CXX_COMMON_FLAGS=(
-    -I/src/wasm/signalsmith/signalsmith-stretch/include
-    -I/src/wasm/signalsmith/signalsmith-linear/include
-    -std=c++17 -fno-exceptions -fno-rtti
-    -O3 -flto -msimd128
-)
-
-for f in /src/wasm/*.c; do
-    emcc "$f" -c -o "$OBJDIR/$(basename "$f" .c).o" "${C_COMMON_FLAGS[@]}"
-done
-for f in /src/wasm/*.cpp; do
-    em++ "$f" -c -o "$OBJDIR/$(basename "$f" .cpp).o" "${CXX_COMMON_FLAGS[@]}"
-done
-
+# Relink the freshly rebuilt LGPL libraries with the supplied non-LGPL object
+# files.  No proprietary/native shim source is needed for this operation.
 em++ "$OBJDIR"/*.o \
     -L/src/dist/ffmpeg/lib \
     -L${DAV1D_PREFIX}/lib \
@@ -215,7 +145,6 @@ em++ "$OBJDIR"/*.o \
     -s SUPPORT_ERRNO=0 \
     -sUSE_ZLIB=1 \
     --closure 0 \
-    --js-library /src/wasm/library_movi.js \
     -o /src/dist/wasm/kmedia-wasm.js
 
 echo "=== Build complete ==="

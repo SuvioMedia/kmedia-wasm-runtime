@@ -23,11 +23,6 @@ def sourceArchives = [
         name: 'FFmpeg',
         file: file('third-party-sources/' + sourceLock.getProperty('ffmpeg.archive')),
         sha256: sourceLock.getProperty('ffmpeg.sha256')
-    ],
-    [
-        name: 'dav1d',
-        file: file('third-party-sources/' + sourceLock.getProperty('dav1d.archive')),
-        sha256: sourceLock.getProperty('dav1d.sha256')
     ]
 ]
 
@@ -49,13 +44,14 @@ def runtimeSourceIncludes = [
     'NOTICE',
     'FORK.md',
     'LGPL_RELINKING.md',
+    'RELINKING_TERMS.md',
     'LICENSES/**',
     'third-party-sources.properties',
     'third-party-sources/**',
     'cdn/SHA256SUMS',
     'cdn/chunks/kmedia-wasm-runtime.json',
     'docker/**',
-    'wasm/**'
+    'relink/**'
 ]
 
 def runtimeSourceTree = fileTree(rootDir) {
@@ -64,7 +60,7 @@ def runtimeSourceTree = fileTree(rootDir) {
 
 def verifyThirdPartySources = tasks.register('verifyThirdPartySources') {
     group = 'verification'
-    description = 'Verifies the exact FFmpeg and dav1d source archives.'
+    description = 'Verifies the exact complete FFmpeg source archive.'
     inputs.file(sourceLockFile)
     inputs.files(sourceArchives.collect { it.file })
 
@@ -79,6 +75,51 @@ def verifyThirdPartySources = tasks.register('verifyThirdPartySources') {
                     source.name + ' source checksum mismatch: expected=' + source.sha256 + ', actual=' + actual
                 )
             }
+        }
+    }
+}
+
+def verifyRelinkingKit = tasks.register('verifyRelinkingKit') {
+    group = 'verification'
+    description = 'Verifies the complete non-LGPL object-code relinking kit.'
+
+    def checksumFile = file('relink/SHA256SUMS')
+    def relinkDirectory = file('relink')
+    def relinkFiles = fileTree(relinkDirectory) {
+        exclude 'SHA256SUMS'
+    }
+    inputs.file(checksumFile)
+    inputs.files(relinkFiles)
+
+    doLast {
+        def expected = [:]
+        checksumFile.eachLine { line ->
+            def columns = line.trim().split(/\s+/, 2)
+            if (columns.length == 2) {
+                expected[columns[1]] = columns[0].toLowerCase(Locale.ROOT)
+            }
+        }
+
+        def actualPaths = relinkFiles.files.collect { input ->
+            relinkDirectory.toPath().relativize(input.toPath()).toString().replace('\\', '/')
+        } as Set
+        if (actualPaths != expected.keySet()) {
+            throw new GradleException(
+                'Unexpected relinking kit files: missing=' + (expected.keySet() - actualPaths) +
+                    ', extra=' + (actualPaths - expected.keySet())
+            )
+        }
+
+        expected.each { relativePath, expectedHash ->
+            def input = new File(relinkDirectory, relativePath)
+            def actualHash = sha256(input)
+            if (actualHash != expectedHash) {
+                throw new GradleException('Relinking input checksum mismatch for ' + relativePath)
+            }
+        }
+
+        if (expected['dav1d/lib/libdav1d.a'] != sourceLock.getProperty('dav1d.library.sha256')) {
+            throw new GradleException('dav1d library checksum does not match the source lock')
         }
     }
 }
@@ -152,11 +193,11 @@ def runtimeArchive = tasks.register('runtimeArchive', Zip) {
         into 'kmedia-wasm-runtime'
     }
     from(layout.projectDirectory) {
-        include 'LICENSE', 'NOTICE', 'LGPL_RELINKING.md'
+        include 'LICENSE', 'NOTICE', 'LGPL_RELINKING.md', 'RELINKING_TERMS.md'
         into 'META-INF'
     }
     from(layout.projectDirectory.dir('LICENSES')) {
-        include 'LGPL-2.1.txt'
+        include '**'
         into 'META-INF/LICENSES'
     }
     from(layout.projectDirectory.file('cdn/SHA256SUMS')) {
@@ -167,7 +208,7 @@ def runtimeArchive = tasks.register('runtimeArchive', Zip) {
 def runtimeSourcesJar = tasks.register('runtimeSourcesJar', Jar) {
     group = 'build'
     description = 'Packages complete corresponding source and relinking material.'
-    dependsOn verifyThirdPartySources
+    dependsOn verifyThirdPartySources, verifyRelinkingKit
     archiveBaseName.set('kmedia-wasm-engine-runtime-assets')
     archiveVersion.set(project.version.toString())
     archiveClassifier.set('sources')
@@ -191,7 +232,8 @@ def runtimeDocsJar = tasks.register('runtimeDocsJar', Jar) {
     preserveFileTimestamps = false
 
     from(rootDir) {
-        include 'README.md', 'NOTICE', 'LGPL_RELINKING.md', 'LICENSES/**'
+        include 'README.md', 'LICENSE', 'NOTICE', 'LGPL_RELINKING.md',
+            'RELINKING_TERMS.md', 'LICENSES/**'
     }
 }
 
@@ -210,7 +252,15 @@ def verifyRuntimeArchive = tasks.register('verifyRuntimeArchive') {
             'META-INF/LICENSE',
             'META-INF/NOTICE',
             'META-INF/LGPL_RELINKING.md',
+            'META-INF/RELINKING_TERMS.md',
+            'META-INF/LICENSES/Apache-2.0.txt',
+            'META-INF/LICENSES/Emscripten.txt',
             'META-INF/LICENSES/LGPL-2.1.txt',
+            'META-INF/LICENSES/LLVM-libcxx.txt',
+            'META-INF/LICENSES/Signalsmith-MIT.txt',
+            'META-INF/LICENSES/dav1d-BSD-2-Clause.txt',
+            'META-INF/LICENSES/musl.txt',
+            'META-INF/LICENSES/zlib.txt',
             'META-INF/SHA256SUMS'
         ] as Set
         def entries = [] as Set
@@ -266,13 +316,16 @@ def verifyRuntimeSourcesArchive = tasks.register('verifyRuntimeSourcesArchive') 
         }
 
         [
-            'wasm/movi.c',
-            'wasm/library_movi.js',
             'docker/Dockerfile',
             'docker/build-ffmpeg.sh',
             'third-party-sources/ffmpeg-9.0.1.tar.gz',
-            'third-party-sources/dav1d-1.5.3.tar.gz',
-            'LICENSES/LGPL-2.1.txt'
+            'relink/SHA256SUMS',
+            'relink/objects/movi.o',
+            'relink/objects/movi_stretch.o',
+            'relink/dav1d/lib/libdav1d.a',
+            'relink/dav1d/include/dav1d/dav1d.h',
+            'LICENSES/LGPL-2.1.txt',
+            'RELINKING_TERMS.md'
         ].each { required ->
             if (!entries.contains(required)) {
                 throw new GradleException('Corresponding source omits ' + required)
@@ -285,7 +338,14 @@ def verifyRuntimeSourcesArchive = tasks.register('verifyRuntimeSourcesArchive') 
                 entry.endsWith('.kts') ||
                 entry.endsWith('.ts') ||
                 entry.endsWith('.tsx') ||
-                entry.endsWith('.wasm')
+                entry.endsWith('.wasm') ||
+                entry.endsWith('.c') ||
+                entry.endsWith('.cc') ||
+                entry.endsWith('.cpp') ||
+                entry.endsWith('.cxx') ||
+                (entry.endsWith('.h') && !entry.startsWith('relink/dav1d/include/dav1d/')) ||
+                entry.startsWith('wasm/') ||
+                entry == 'third-party-sources/dav1d-1.5.3.tar.gz'
         }
         if (forbidden != null) {
             throw new GradleException('The sources JAR exposes a forbidden entry: ' + forbidden)
@@ -295,7 +355,7 @@ def verifyRuntimeSourcesArchive = tasks.register('verifyRuntimeSourcesArchive') 
 
 def verifyPublicBoundary = tasks.register('verifyPublicBoundary') {
     group = 'verification'
-    description = 'Rejects Kotlin, TypeScript, npm, UI, and retired product paths.'
+    description = 'Rejects product and non-LGPL native source from the public repository.'
 
     inputs.files(fileTree(rootDir) {
         exclude '.git/**', '.gradle/**', 'build/**', 'dist/**'
@@ -306,10 +366,7 @@ def verifyPublicBoundary = tasks.register('verifyPublicBoundary') {
             exclude '.git/**', '.gradle/**', 'build/**', 'dist/**'
         }.files
 
-        def allowedJavaScript = [
-            'wasm/library_movi.js',
-            'cdn/chunks/kmedia-wasm.js'
-        ] as Set
+        def allowedJavaScript = ['cdn/chunks/kmedia-wasm.js'] as Set
         def forbiddenNames = [
             'package.json',
             'package-lock.json',
@@ -318,7 +375,7 @@ def verifyPublicBoundary = tasks.register('verifyPublicBoundary') {
             'compose.yaml'
         ] as Set
         def forbiddenRoots = [
-            'player/', 'src/', 'packages/', 'app/', 'desktop/',
+            'player/', 'src/', 'wasm/', 'packages/', 'app/', 'desktop/',
             'chrome-extension/', 'vscode-extension/', 'examples/',
             'test-fixtures/', 'encrypted-server/'
         ]
@@ -329,7 +386,10 @@ def verifyPublicBoundary = tasks.register('verifyPublicBoundary') {
             def forbiddenLanguage =
                 lower.endsWith('.kt') || lower.endsWith('.kts') ||
                 lower.endsWith('.ts') || lower.endsWith('.tsx') ||
-                lower.endsWith('.mts') || lower.endsWith('.cts')
+                lower.endsWith('.mts') || lower.endsWith('.cts') ||
+                lower.endsWith('.c') || lower.endsWith('.cc') ||
+                lower.endsWith('.cpp') || lower.endsWith('.cxx') ||
+                (lower.endsWith('.h') && !relative.startsWith('relink/dav1d/include/dav1d/'))
             def unexpectedJavaScript = lower.endsWith('.js') && !allowedJavaScript.contains(relative)
             forbiddenLanguage ||
                 unexpectedJavaScript ||
@@ -345,14 +405,16 @@ def verifyPublicBoundary = tasks.register('verifyPublicBoundary') {
 
 def verifyLicenseBoundary = tasks.register('verifyLicenseBoundary') {
     group = 'verification'
-    description = 'Verifies LGPL source, toolchain pins, and FFmpeg flags.'
-    dependsOn verifyThirdPartySources
+    description = 'Verifies LGPL source, object relinking, toolchain pins, and license scope.'
+    dependsOn verifyThirdPartySources, verifyRelinkingKit
     inputs.files(
         'LICENSE',
         'NOTICE',
         'LGPL_RELINKING.md',
-        'LICENSES/LGPL-2.1.txt',
+        'RELINKING_TERMS.md',
+        fileTree('LICENSES'),
         'third-party-sources.properties',
+        'relink/SHA256SUMS',
         'docker/Dockerfile',
         'docker/build-ffmpeg.sh'
     )
@@ -375,8 +437,34 @@ def verifyLicenseBoundary = tasks.register('verifyLicenseBoundary') {
         if (buildScript =~ /--enable-(gpl|nonfree)\b/) {
             throw new GradleException('GPL or non-free FFmpeg components must not be enabled')
         }
-        if (!file('LICENSES/LGPL-2.1.txt').isFile()) {
-            throw new GradleException('The LGPL 2.1 license text is missing')
+        if (!buildScript.contains('OBJDIR=/src/relink/objects')) {
+            throw new GradleException('The final link does not use the supplied object-code kit')
+        }
+        if (buildScript.contains('/src/wasm/') || buildScript.contains('for f in /src/')) {
+            throw new GradleException('The public relink script still compiles private native source')
+        }
+        if (dockerfile.contains('dav1d-1.5.3.tar.gz')) {
+            throw new GradleException('The public Dockerfile still exposes the BSD dav1d source archive')
+        }
+        if (file('wasm').exists() || file('third-party-sources/dav1d-1.5.3.tar.gz').exists()) {
+            throw new GradleException('Non-LGPL native source remains in the public repository')
+        }
+        if (!(file('LICENSE').text =~ /not\s+licensed as a whole under Apache-2\.0/)) {
+            throw new GradleException('The license map still presents the whole repository as Apache-2.0')
+        }
+        [
+            'LGPL-2.1.txt',
+            'Apache-2.0.txt',
+            'dav1d-BSD-2-Clause.txt',
+            'Signalsmith-MIT.txt',
+            'Emscripten.txt',
+            'musl.txt',
+            'LLVM-libcxx.txt',
+            'zlib.txt'
+        ].each { licenseFile ->
+            if (!file('LICENSES/' + licenseFile).isFile()) {
+                throw new GradleException('Required license text is missing: ' + licenseFile)
+            }
         }
     }
 }
@@ -389,6 +477,7 @@ tasks.named('check') {
     dependsOn(
         verifyRuntimeArchive,
         verifyRuntimeSourcesArchive,
+        verifyRelinkingKit,
         verifyPublicBoundary,
         verifyLicenseBoundary
     )
@@ -420,13 +509,13 @@ publishing {
                 inceptionYear = '2026'
                 licenses {
                     license {
-                        name = 'Apache License 2.0'
-                        url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                        name = 'GNU Lesser General Public License, version 2.1 or later'
+                        url = 'https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html'
                         distribution = 'repo'
                     }
                     license {
-                        name = 'GNU Lesser General Public License, version 2.1 or later'
-                        url = 'https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html'
+                        name = 'Bundled component license map and relinking terms'
+                        url = 'https://github.com/SuvioMedia/kmedia-wasm-runtime/blob/main/LICENSE'
                         distribution = 'repo'
                     }
                 }
