@@ -101,24 +101,47 @@ jobs:
           ' "$deployments" > "$deployment_ids"
 
           : > "$matches"
+          total_count=0
+          validated_count=0
+          publishing_count=0
+          published_count=0
+          exact_path_count=0
+          identical_count=0
           while IFS= read -r candidate; do
+            total_count=$((total_count + 1))
             [[ "$candidate" =~ ^[0-9a-fA-F-]{36}$ ]]
             curl --config "$config" --fail --silent --show-error --request POST \
               --output "$status" \
               --url "https://central.sonatype.com/api/v1/publisher/status?id=$candidate"
-            if ! jq -e --arg id "$candidate" '
-              .deploymentId == $id and
-              .deploymentState == "VALIDATED"
-            ' "$status" >/dev/null; then
-              continue
-            fi
+            state="$(jq -er --arg id "$candidate" '
+              if .deploymentId == $id then .deploymentState
+              else error("Central status ID mismatch") end
+            ' "$status")"
+            case "$state" in
+              VALIDATED) validated_count=$((validated_count + 1)) ;;
+              PUBLISHING)
+                publishing_count=$((publishing_count + 1))
+                continue
+                ;;
+              PUBLISHED)
+                published_count=$((published_count + 1))
+                continue
+                ;;
+              *) continue ;;
+            esac
             if curl --config "$config" --fail --silent \
               --output "$candidate_pom" \
-              --url "https://central.sonatype.com/api/v1/publisher/deployment/$candidate/download/$relative_pom" &&
-              cmp -s "$candidate_pom" "$expected_pom"; then
-              printf '%s\n' "$candidate" >> "$matches"
+              --url "https://central.sonatype.com/api/v1/publisher/deployment/$candidate/download/$relative_pom"; then
+              exact_path_count=$((exact_path_count + 1))
+              if cmp -s "$candidate_pom" "$expected_pom"; then
+                identical_count=$((identical_count + 1))
+                printf '%s\n' "$candidate" >> "$matches"
+              fi
             fi
           done < "$deployment_ids"
+          printf 'Central promotion scan: total=%s validated=%s publishing=%s published=%s exact-path=%s byte-identical=%s\n' \
+            "$total_count" "$validated_count" "$publishing_count" "$published_count" \
+            "$exact_path_count" "$identical_count"
           test "$(wc -l < "$matches")" -eq 1
           deployment="$(tr -d '\r\n' < "$matches")"
           [[ "$deployment" =~ ^[0-9a-fA-F-]{36}$ ]]

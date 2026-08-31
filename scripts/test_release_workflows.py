@@ -54,6 +54,8 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn("scripts/verify_publication.py", self.promote)
         self.assertIn("/download/$relative_pom", self.promote)
         self.assertIn('cmp -s "$candidate_pom" "$expected_pom"', self.promote)
+        self.assertIn("Central promotion scan:", self.promote)
+        self.assertIn("byte-identical=%s", self.promote)
         self.assertNotIn(".deploymentName ==", self.promote)
 
     def test_only_the_public_suviomedia_coordinate_is_bundled(self) -> None:
