@@ -43,6 +43,24 @@ jobs:
           test "$(git describe --tags --exact-match HEAD)" = "v$VERSION"
           git merge-base --is-ancestor HEAD refs/remotes/origin/main
           test "$(gh release view "v$VERSION" --json isDraft --jq .isDraft)" = false
+      - name: Recover the exact public POM from the immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir "$RUNNER_TEMP/release" "$RUNNER_TEMP/staging"
+          name="kmedia-wasm-runtime-$VERSION-maven-repository.tar.gz"
+          gh release download "v$VERSION" --dir "$RUNNER_TEMP/release" \
+            --pattern "$name" --pattern SHA256SUMS
+          matches="$(awk -v p="$name" '$2 == p || $2 == "./" p {print $1}' "$RUNNER_TEMP/release/SHA256SUMS")"
+          test "$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l)" -eq 1
+          [[ "$matches" =~ ^[0-9a-f]{64}$ ]]
+          test "$matches" = "$(sha256sum "$RUNNER_TEMP/release/$name" | awk '{print $1}')"
+          tar -xzf "$RUNNER_TEMP/release/$name" -C "$RUNNER_TEMP/staging" --strip-components=1
+          python3 scripts/build_central_bundle.py --normalize \
+            --staging "$RUNNER_TEMP/staging" --version "$VERSION"
+          python3 scripts/verify_publication.py \
+            --staging "$RUNNER_TEMP/staging" --version "$VERSION"
+          test -f "$RUNNER_TEMP/staging/cc/suviomedia/kmedia-wasm-engine-runtime-assets/$VERSION/kmedia-wasm-engine-runtime-assets-$VERSION.pom"
       - name: Publish the exact validated Central deployment
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
@@ -57,7 +75,8 @@ jobs:
           deployment_ids="$RUNNER_TEMP/central-deployment-ids"
           matches="$RUNNER_TEMP/central-matches"
           status="$RUNNER_TEMP/deployment-status"
-          trap 'rm -f "$credentials" "$config" "$deployments" "$deployment_ids" "$matches" "$status"' EXIT
+          candidate_pom="$RUNNER_TEMP/candidate.pom"
+          trap 'rm -f "$credentials" "$config" "$deployments" "$deployment_ids" "$matches" "$status" "$candidate_pom"' EXIT
           printf '%s:%s' "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" > "$credentials"
           unset MAVEN_CENTRAL_USERNAME MAVEN_CENTRAL_PASSWORD
           authorization="$(base64 --wrap=0 < "$credentials")"
@@ -66,6 +85,8 @@ jobs:
           unset authorization
 
           expected_purl="pkg:maven/cc.suviomedia/kmedia-wasm-engine-runtime-assets@$VERSION"
+          relative_pom="cc/suviomedia/kmedia-wasm-engine-runtime-assets/$VERSION/kmedia-wasm-engine-runtime-assets-$VERSION.pom"
+          expected_pom="$RUNNER_TEMP/staging/$relative_pom"
           curl --config "$config" --fail --silent --show-error \
             --output "$deployments" \
             --url "https://central.sonatype.com/api/v1/publisher/deployments"
@@ -85,33 +106,32 @@ jobs:
             curl --config "$config" --fail --silent --show-error --request POST \
               --output "$status" \
               --url "https://central.sonatype.com/api/v1/publisher/status?id=$candidate"
-            if jq -e --arg id "$candidate" --arg purl "$expected_purl" '
+            if ! jq -e --arg id "$candidate" '
               .deploymentId == $id and
-              (.deploymentState == "VALIDATED" or
-               .deploymentState == "PUBLISHING" or
-               .deploymentState == "PUBLISHED") and
-              ((.purls // []) | index($purl) != null)
+              .deploymentState == "VALIDATED"
             ' "$status" >/dev/null; then
-              jq -er '.deploymentState + " " + .deploymentId' "$status" >> "$matches"
+              continue
+            fi
+            if curl --config "$config" --fail --silent \
+              --output "$candidate_pom" \
+              --url "https://central.sonatype.com/api/v1/publisher/deployment/$candidate/download/$relative_pom" &&
+              cmp -s "$candidate_pom" "$expected_pom"; then
+              printf '%s\n' "$candidate" >> "$matches"
             fi
           done < "$deployment_ids"
           test "$(wc -l < "$matches")" -eq 1
-          read -r initial_state deployment < "$matches"
+          deployment="$(tr -d '\r\n' < "$matches")"
           [[ "$deployment" =~ ^[0-9a-fA-F-]{36}$ ]]
 
-          case "$initial_state" in
-            PUBLISHED)
-              printf 'Published `%s` to Maven Central.\n' "$expected_purl" >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-              ;;
-            PUBLISHING) ;;
-            VALIDATED)
-              curl --config "$config" --fail --silent --show-error --request POST \
-                --output /dev/null \
-                --url "https://central.sonatype.com/api/v1/publisher/deployment/$deployment"
-              ;;
-            *) exit 1 ;;
-          esac
+          curl --config "$config" --fail --silent --show-error --request POST \
+            --output "$status" \
+            --url "https://central.sonatype.com/api/v1/publisher/status?id=$deployment"
+          jq -e --arg id "$deployment" '
+            .deploymentId == $id and .deploymentState == "VALIDATED"
+          ' "$status" >/dev/null
+          curl --config "$config" --fail --silent --show-error --request POST \
+            --output /dev/null \
+            --url "https://central.sonatype.com/api/v1/publisher/deployment/$deployment"
           for attempt in {1..240}; do
             curl --config "$config" --fail --silent --show-error --request POST \
               --output "$status" \
