@@ -54,8 +54,10 @@ jobs:
           credentials="$RUNNER_TEMP/central-credentials"
           config="$RUNNER_TEMP/central-curl.conf"
           deployments="$RUNNER_TEMP/central-deployments"
+          deployment_ids="$RUNNER_TEMP/central-deployment-ids"
+          matches="$RUNNER_TEMP/central-matches"
           status="$RUNNER_TEMP/deployment-status"
-          trap 'rm -f "$credentials" "$config" "$deployments" "$status"' EXIT
+          trap 'rm -f "$credentials" "$config" "$deployments" "$deployment_ids" "$matches" "$status"' EXIT
           printf '%s:%s' "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" > "$credentials"
           unset MAVEN_CENTRAL_USERNAME MAVEN_CENTRAL_PASSWORD
           authorization="$(base64 --wrap=0 < "$credentials")"
@@ -63,38 +65,53 @@ jobs:
           printf 'header = "Authorization: Bearer %s"\n' "$authorization" > "$config"
           unset authorization
 
-          expected_name="KMedia Wasm Runtime $VERSION"
           expected_purl="pkg:maven/cc.suviomedia/kmedia-wasm-engine-runtime-assets@$VERSION"
           curl --config "$config" --fail --silent --show-error \
             --output "$deployments" \
             --url "https://central.sonatype.com/api/v1/publisher/deployments"
-          deployment="$(jq -er --arg name "$expected_name" '
+          jq -er '
             (if type == "array" then .
              elif (.deployments | type) == "array" then .deployments
              else error("unexpected Central deployment-list response") end)
-            | [.[] | select(
-                .deploymentName == $name and
-                .deploymentState == "VALIDATED"
-              )]
-            | if length == 1 then .[0].deploymentId
-              else error("expected exactly one validated deployment with the exact release name")
+            | map(.deploymentId) | unique
+            | if length > 0 and length <= 500 then .[]
+              else error("unexpected Central deployment count")
               end
-          ' "$deployments")"
+          ' "$deployments" > "$deployment_ids"
+
+          : > "$matches"
+          while IFS= read -r candidate; do
+            [[ "$candidate" =~ ^[0-9a-fA-F-]{36}$ ]]
+            curl --config "$config" --fail --silent --show-error --request POST \
+              --output "$status" \
+              --url "https://central.sonatype.com/api/v1/publisher/status?id=$candidate"
+            if jq -e --arg id "$candidate" --arg purl "$expected_purl" '
+              .deploymentId == $id and
+              (.deploymentState == "VALIDATED" or
+               .deploymentState == "PUBLISHING" or
+               .deploymentState == "PUBLISHED") and
+              ((.purls // []) | index($purl) != null)
+            ' "$status" >/dev/null; then
+              jq -er '.deploymentState + " " + .deploymentId' "$status" >> "$matches"
+            fi
+          done < "$deployment_ids"
+          test "$(wc -l < "$matches")" -eq 1
+          read -r initial_state deployment < "$matches"
           [[ "$deployment" =~ ^[0-9a-fA-F-]{36}$ ]]
 
-          curl --config "$config" --fail --silent --show-error --request POST \
-            --output "$status" \
-            --url "https://central.sonatype.com/api/v1/publisher/status?id=$deployment"
-          jq -e --arg id "$deployment" --arg name "$expected_name" --arg purl "$expected_purl" '
-            .deploymentId == $id and
-            .deploymentName == $name and
-            .deploymentState == "VALIDATED" and
-            ((.purls // []) | index($purl) != null)
-          ' "$status" >/dev/null
-
-          curl --config "$config" --fail --silent --show-error --request POST \
-            --output /dev/null \
-            --url "https://central.sonatype.com/api/v1/publisher/deployment/$deployment"
+          case "$initial_state" in
+            PUBLISHED)
+              printf 'Published `%s` to Maven Central.\n' "$expected_purl" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+              ;;
+            PUBLISHING) ;;
+            VALIDATED)
+              curl --config "$config" --fail --silent --show-error --request POST \
+                --output /dev/null \
+                --url "https://central.sonatype.com/api/v1/publisher/deployment/$deployment"
+              ;;
+            *) exit 1 ;;
+          esac
           for attempt in {1..240}; do
             curl --config "$config" --fail --silent --show-error --request POST \
               --output "$status" \
