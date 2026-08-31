@@ -50,7 +50,10 @@ class ReleaseWorkflowTest(unittest.TestCase):
             self.promote,
         )
         self.assertIn('.deploymentState == "VALIDATED"', self.promote)
-        self.assertIn("length == 1", self.promote)
+        self.assertIn('.deploymentState == "PUBLISHING"', self.promote)
+        self.assertIn('.deploymentState == "PUBLISHED"', self.promote)
+        self.assertIn('test "$(wc -l < "$matches")" -eq 1', self.promote)
+        self.assertNotIn(".deploymentName ==", self.promote)
 
     def test_only_the_public_suviomedia_coordinate_is_bundled(self) -> None:
         root = Path(__file__).resolve().parents[1]
