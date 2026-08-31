@@ -12,7 +12,7 @@ The repository contains only:
 - a digest-pinned Emscripten build recipe;
 - the generated loader, Wasm binary, ABI manifest, checksums, and licenses;
 - a minimal Gradle publisher for
-  `io.github.shusek:kmedia-wasm-engine-runtime-assets`.
+  `cc.suviomedia:kmedia-wasm-engine-runtime-assets`.
 
 There is intentionally no Kotlin implementation, TypeScript layer, npm
 package, UI, application test suite, or `compose.yaml` in this repository.
@@ -33,6 +33,12 @@ The local Maven repository is written to
 the three runtime files. Its real `-sources.jar` contains complete FFmpeg
 source, non-LGPL relinking objects, the dav1d SDK, build recipe, checksums, and
 license material.
+
+Released versions are built exclusively by GitHub-hosted runners. A release is
+created explicitly from `main`, and the already released Maven repository is
+then submitted separately to Maven Central through the protected
+`maven-central` environment. This repository never publishes through Suvio's
+private runners or kkRepo.
 
 ## Rebuild the native runtime
 
