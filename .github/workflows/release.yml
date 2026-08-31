@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+name: Build immutable KMedia Wasm runtime release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Public runtime SemVer, for example 1.0.0-rc.1
+        required: true
+        type: string
+      tested_commit:
+        description: Forty-character commit tested and rebuilt locally
+        required: true
+        type: string
+      rebuild_verified:
+        description: Confirm the checked-in runtime was rebuilt from the pinned public inputs
+        required: true
+        default: false
+        type: boolean
+      rebuild_report_sha256:
+        description: SHA-256 of the retained path-free rebuild report
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: kmedia-wasm-runtime-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    if: >-
+      github.repository == 'SuvioMedia/kmedia-wasm-runtime' &&
+      github.actor == 'Shusek' &&
+      github.triggering_actor == 'Shusek'
+    env:
+      VERSION: ${{ inputs.version }}
+      TESTED_COMMIT: ${{ inputs.tested_commit }}
+      REBUILD_VERIFIED: ${{ inputs.rebuild_verified }}
+      REPORT_SHA256: ${{ inputs.rebuild_report_sha256 }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+      - id: identity
+        name: Bind the release to reviewed main and retained rebuild evidence
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
+          [[ "$TESTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$TESTED_COMMIT"
+          test "$REBUILD_VERIFIED" = true
+          [[ "$REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          if git show-ref --verify --quiet "refs/tags/v$VERSION"; then exit 1; fi
+          ./gradlew --no-daemon check
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+          echo "epoch=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Stage and validate the closed public Maven publication
+        run: |
+          ./gradlew --no-daemon -PpublicationVersion="$VERSION" \
+            publishAllPublicationsToProjectLocalRepository
+          mkdir "$RUNNER_TEMP/maven"
+          cp -R build/project-local-repository/. "$RUNNER_TEMP/maven/"
+          python3 scripts/build_central_bundle.py --normalize \
+            --staging "$RUNNER_TEMP/maven" --version "$VERSION"
+          python3 scripts/verify_publication.py \
+            --staging "$RUNNER_TEMP/maven" --version "$VERSION"
+          tar --sort=name --mtime='@${{ steps.identity.outputs.epoch }}' \
+            --owner=0 --group=0 --numeric-owner -czf \
+            "$RUNNER_TEMP/kmedia-wasm-runtime-$VERSION-maven-repository.tar.gz" \
+            -C "$RUNNER_TEMP" maven
+      - name: Build the immutable release asset inventory
+        run: |
+          artifact="$RUNNER_TEMP/maven/cc/suviomedia/kmedia-wasm-engine-runtime-assets/$VERSION"
+          mkdir "$RUNNER_TEMP/assets"
+          cp "$artifact/kmedia-wasm-engine-runtime-assets-$VERSION.zip" "$RUNNER_TEMP/assets/"
+          cp "$artifact/kmedia-wasm-engine-runtime-assets-$VERSION-sources.jar" "$RUNNER_TEMP/assets/"
+          cp "$artifact/kmedia-wasm-engine-runtime-assets-$VERSION-javadoc.jar" "$RUNNER_TEMP/assets/"
+          cp "$RUNNER_TEMP/kmedia-wasm-runtime-$VERSION-maven-repository.tar.gz" "$RUNNER_TEMP/assets/"
+          cp README.md NOTICE "$RUNNER_TEMP/assets/"
+          (cd "$RUNNER_TEMP/assets" && sha256sum * > SHA256SUMS)
+      - name: Create the immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=()
+          if [[ "$VERSION" == *-* ]]; then prerelease+=(--prerelease); fi
+          gh release create "v$VERSION" "$RUNNER_TEMP/assets"/* \
+            --target "$TESTED_COMMIT" \
+            --title "KMedia Wasm Runtime $VERSION" \
+            --generate-notes "${prerelease[@]}"

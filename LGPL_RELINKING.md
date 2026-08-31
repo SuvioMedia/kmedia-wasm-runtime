@@ -1,6 +1,6 @@
 # FFmpeg/WebAssembly source and relinking
 
-The `io.github.shusek:kmedia-wasm-engine-runtime-assets` Maven artifact contains
+The `cc.suviomedia:kmedia-wasm-engine-runtime-assets` Maven artifact contains
 `kmedia-wasm-runtime/kmedia-wasm.wasm` and its Emscripten loader. The WebAssembly
 binary statically combines FFmpeg libraries configured as LGPL-2.1-or-later
 with a non-LGPL work. GPL and non-free FFmpeg components are not enabled.
@@ -9,7 +9,7 @@ LGPL-2.1 section 6(a) permits that non-LGPL work to be supplied as object code
 rather than source, provided recipients can modify FFmpeg and relink a working
 executable. Accordingly, every runtime version publishes this minimal kit in
 the durable Maven Central classifier
-`io.github.shusek:kmedia-wasm-engine-runtime-assets:<version>:sources@jar`:
+`cc.suviomedia:kmedia-wasm-engine-runtime-assets:<version>:sources@jar`:
 
 - `third-party-sources/ffmpeg-9.0.1.tar.gz` — complete, unmodified source for
   exact FFmpeg commit `bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa`;

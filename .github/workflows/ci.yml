@@ -24,3 +24,6 @@ jobs:
 
       - name: Verify public boundary and Maven publications
         run: ./gradlew check publishAllPublicationsToProjectLocalRepository --no-daemon
+
+      - name: Verify release and Maven Central boundaries
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
