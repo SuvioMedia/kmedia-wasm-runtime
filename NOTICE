@@ -1,0 +1,31 @@
+KMedia Wasm Runtime
+===================
+
+Original project:
+  Copyright 2026 Ujjawal Kashyap
+  https://github.com/mrujjwalg/movi-player
+
+Native runtime modifications:
+  Copyright 2026 KMediaPlayer contributors
+  https://github.com/SuvioMedia/kmedia-wasm-runtime
+
+Inherited movi-player portions embedded in the object files and runtime remain
+subject to Apache-2.0. SuvioMedia's native shim source is private; only its
+machine-readable object code is supplied for LGPL relinking. The license map,
+narrow relinking permission, and third-party notices are in LICENSE,
+RELINKING_TERMS.md, and LICENSES/.
+
+This repository contains no Kotlin engine, TypeScript product, npm package, UI,
+or application source. A separately distributed proprietary player is not
+linked into this native WebAssembly binary.
+
+The distributed browser artifacts include code from FFmpeg (LGPL-2.1-or-later),
+dav1d (BSD-2-Clause), Emscripten, musl libc, LLVM runtime components,
+Signalsmith Stretch (MIT), and zlib. These components remain under their
+respective licenses.
+
+The Maven `-sources.jar` includes the exact FFmpeg source, the object files and
+prebuilt dav1d SDK used for relinking, the complete FFmpeg configure/final-link
+recipe, checksums, and licenses. It intentionally contains no native shim,
+Signalsmith, Kotlin, or TypeScript source. The Emscripten image is pinned by
+version and multi-architecture digest. See LGPL_RELINKING.md.

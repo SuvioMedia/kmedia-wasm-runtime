@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+name: Publish one validated KMedia Wasm runtime deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing validated release version, including RCs
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kmedia-wasm-runtime-central-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: maven-central
+    if: >-
+      github.repository == 'SuvioMedia/kmedia-wasm-runtime' &&
+      github.actor == 'Shusek' &&
+      github.triggering_actor == 'Shusek'
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: refs/tags/v${{ inputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind promotion to a non-draft immutable release on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
+          test "$(git describe --tags --exact-match HEAD)" = "v$VERSION"
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          test "$(gh release view "v$VERSION" --json isDraft --jq .isDraft)" = false
+      - name: Recover the exact public POM from the immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir "$RUNNER_TEMP/release" "$RUNNER_TEMP/staging"
+          name="kmedia-wasm-runtime-$VERSION-maven-repository.tar.gz"
+          gh release download "v$VERSION" --dir "$RUNNER_TEMP/release" \
+            --pattern "$name" --pattern SHA256SUMS
+          matches="$(awk -v p="$name" '$2 == p || $2 == "./" p {print $1}' "$RUNNER_TEMP/release/SHA256SUMS")"
+          test "$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l)" -eq 1
+          [[ "$matches" =~ ^[0-9a-f]{64}$ ]]
+          test "$matches" = "$(sha256sum "$RUNNER_TEMP/release/$name" | awk '{print $1}')"
+          tar -xzf "$RUNNER_TEMP/release/$name" -C "$RUNNER_TEMP/staging" --strip-components=1
+          python3 scripts/build_central_bundle.py --normalize \
+            --staging "$RUNNER_TEMP/staging" --version "$VERSION"
+          python3 scripts/verify_publication.py \
+            --staging "$RUNNER_TEMP/staging" --version "$VERSION"
+          test -f "$RUNNER_TEMP/staging/cc/suviomedia/kmedia-wasm-engine-runtime-assets/$VERSION/kmedia-wasm-engine-runtime-assets-$VERSION.pom"
+      - name: Publish the exact validated Central deployment
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          test -n "$MAVEN_CENTRAL_USERNAME"
+          test -n "$MAVEN_CENTRAL_PASSWORD"
+          umask 077
+          credentials="$RUNNER_TEMP/central-credentials"
+          config="$RUNNER_TEMP/central-curl.conf"
+          deployments="$RUNNER_TEMP/central-deployments"
+          deployment_ids="$RUNNER_TEMP/central-deployment-ids"
+          matches="$RUNNER_TEMP/central-matches"
+          status="$RUNNER_TEMP/deployment-status"
+          candidate_pom="$RUNNER_TEMP/candidate.pom"
+          trap 'rm -f "$credentials" "$config" "$deployments" "$deployment_ids" "$matches" "$status" "$candidate_pom"' EXIT
+          printf '%s:%s' "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_PASSWORD" > "$credentials"
+          unset MAVEN_CENTRAL_USERNAME MAVEN_CENTRAL_PASSWORD
+          authorization="$(base64 --wrap=0 < "$credentials")"
+          rm -f "$credentials"
+          printf 'header = "Authorization: Bearer %s"\n' "$authorization" > "$config"
+          unset authorization
+
+          expected_purl="pkg:maven/cc.suviomedia/kmedia-wasm-engine-runtime-assets@$VERSION"
+          relative_pom="cc/suviomedia/kmedia-wasm-engine-runtime-assets/$VERSION/kmedia-wasm-engine-runtime-assets-$VERSION.pom"
+          expected_pom="$RUNNER_TEMP/staging/$relative_pom"
+          curl --config "$config" --fail --silent --show-error \
+            --output "$deployments" \
+            --url "https://central.sonatype.com/api/v1/publisher/deployments"
+          jq -er '
+            (if type == "array" then .
+             elif (.deployments | type) == "array" then .deployments
+             else error("unexpected Central deployment-list response") end)
+            | map(.deploymentId) | unique
+            | if length > 0 and length <= 500 then .[]
+              else error("unexpected Central deployment count")
+              end
+          ' "$deployments" > "$deployment_ids"
+
+          : > "$matches"
+          total_count=0
+          validated_count=0
+          publishing_count=0
+          published_count=0
+          exact_path_count=0
+          identical_count=0
+          while IFS= read -r candidate; do
+            total_count=$((total_count + 1))
+            [[ "$candidate" =~ ^[0-9a-fA-F-]{36}$ ]]
+            curl --config "$config" --fail --silent --show-error --request POST \
+              --output "$status" \
+              --url "https://central.sonatype.com/api/v1/publisher/status?id=$candidate"
+            state="$(jq -er --arg id "$candidate" '
+              if .deploymentId == $id then .deploymentState
+              else error("Central status ID mismatch") end
+            ' "$status")"
+            case "$state" in
+              VALIDATED) validated_count=$((validated_count + 1)) ;;
+              PUBLISHING)
+                publishing_count=$((publishing_count + 1))
+                continue
+                ;;
+              PUBLISHED)
+                published_count=$((published_count + 1))
+                continue
+                ;;
+              *) continue ;;
+            esac
+            if curl --config "$config" --fail --silent \
+              --output "$candidate_pom" \
+              --url "https://central.sonatype.com/api/v1/publisher/deployment/$candidate/download/$relative_pom"; then
+              exact_path_count=$((exact_path_count + 1))
+              if cmp -s "$candidate_pom" "$expected_pom"; then
+                identical_count=$((identical_count + 1))
+                printf '%s\n' "$candidate" >> "$matches"
+              fi
+            fi
+          done < "$deployment_ids"
+          printf 'Central promotion scan: total=%s validated=%s publishing=%s published=%s exact-path=%s byte-identical=%s\n' \
+            "$total_count" "$validated_count" "$publishing_count" "$published_count" \
+            "$exact_path_count" "$identical_count"
+          test "$(wc -l < "$matches")" -eq 1
+          deployment="$(tr -d '\r\n' < "$matches")"
+          [[ "$deployment" =~ ^[0-9a-fA-F-]{36}$ ]]
+
+          curl --config "$config" --fail --silent --show-error --request POST \
+            --output "$status" \
+            --url "https://central.sonatype.com/api/v1/publisher/status?id=$deployment"
+          jq -e --arg id "$deployment" '
+            .deploymentId == $id and .deploymentState == "VALIDATED"
+          ' "$status" >/dev/null
+          curl --config "$config" --fail --silent --show-error --request POST \
+            --output /dev/null \
+            --url "https://central.sonatype.com/api/v1/publisher/deployment/$deployment"
+          for attempt in {1..240}; do
+            curl --config "$config" --fail --silent --show-error --request POST \
+              --output "$status" \
+              --url "https://central.sonatype.com/api/v1/publisher/status?id=$deployment"
+            state="$(jq -er '.deploymentState' "$status")"
+            case "$state" in
+              PUBLISHED)
+                printf 'Published `%s` to Maven Central.\n' "$expected_purl" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+                ;;
+              VALIDATED|PUBLISHING) ;;
+              FAILED|PENDING|VALIDATING) exit 1 ;;
+              *) exit 1 ;;
+            esac
+            sleep 10
+          done
+          exit 1

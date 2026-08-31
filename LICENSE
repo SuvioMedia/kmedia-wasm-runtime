@@ -1,0 +1,54 @@
+KMEDIA WASM RUNTIME LICENSE MAP
+
+This repository and the runtime archive are composite works. They are not
+licensed as a whole under Apache-2.0 or any other single open-source license.
+
+1. FFmpeg
+
+The complete FFmpeg source archive under `third-party-sources/` and the
+FFmpeg portions of the WebAssembly binary are licensed under GNU Lesser
+General Public License version 2.1 or later. The exact text is in
+`LICENSES/LGPL-2.1.txt`.
+
+2. Relinking scripts and materials
+
+The files under `docker/` that configure, compile, and relink FFmpeg are
+provided under LGPL-2.1-or-later so recipients may reproduce and modify the
+covered library. The checksum and packaging files may be copied and modified
+as necessary to exercise those LGPL rights.
+
+The compiled files under `relink/objects/` contain several components:
+
+- inherited movi-player portions remain under Apache-2.0; see
+  `LICENSES/Apache-2.0.txt`;
+- Signalsmith portions remain under MIT; see
+  `LICENSES/Signalsmith-MIT.txt`;
+- SuvioMedia-authored portions are all rights reserved except for the express
+  object-code permission in `RELINKING_TERMS.md`.
+
+3. dav1d
+
+The prebuilt library and public headers under `relink/dav1d/` are
+BSD-2-Clause; see `LICENSES/dav1d-BSD-2-Clause.txt`. Full dav1d source is not
+included because its license does not require source publication.
+
+4. Generated runtime components
+
+The loader and WebAssembly binary also contain or derive from Emscripten,
+musl, LLVM libc++, and zlib. Their terms are reproduced in:
+
+- `LICENSES/Emscripten.txt`
+- `LICENSES/musl.txt`
+- `LICENSES/LLVM-libcxx.txt`
+- `LICENSES/zlib.txt`
+
+5. Everything else
+
+Unless a file or section above says otherwise, Copyright 2026 KMediaPlayer
+contributors. All rights reserved. Public availability does not grant access
+to or a license for the private native shim source, Signalsmith integration
+source, proprietary Kotlin player, or other product source.
+
+Nothing in this map limits rights granted by a third-party license or by
+mandatory law. All materials are provided "as is", without warranty of any
+kind, to the maximum extent permitted by law.
