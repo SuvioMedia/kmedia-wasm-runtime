@@ -29,3 +29,8 @@ prebuilt dav1d SDK used for relinking, the complete FFmpeg configure/final-link
 recipe, checksums, and licenses. It intentionally contains no native shim,
 Signalsmith, Kotlin, or TypeScript source. The Emscripten image is pinned by
 version and multi-architecture digest. See LGPL_RELINKING.md.
+
+The native seek, Matroska cursor and H.264/HEVC packet-classification fixes
+incorporate Apache-2.0 material from MrUjjwalG/movi-player commits
+641679d7f1d4c5db1046b556d9b390f09ea73ba2, a63ba235bde89a75507abd8b7c272968c4094023
+and 8783a1fb7683a4c93a1693175b5f4240445aa05f.
