@@ -27,6 +27,8 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: write
     environment: maven-central
     if: >-
       github.repository == 'SuvioMedia/kmedia-wasm-runtime' &&
@@ -102,13 +104,16 @@ jobs:
             --staging "$RUNNER_TEMP/staging" --version "$VERSION" \
             --epoch "$(git show -s --format=%ct HEAD)" --output "$bundle"
           unzip -tq "$bundle"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: kmedia-wasm-runtime-central-${{ inputs.version }}
-          path: ${{ runner.temp }}/kmedia-wasm-runtime-${{ inputs.version }}-central.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 1
+      - name: Retain the signed Central bundle in the public release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Keep this required evidence outside the Actions artifact quota.
+          # Each attempt has a unique name; never replace an existing bundle.
+          name="kmedia-wasm-runtime-$VERSION-central-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.zip"
+          cp "$RUNNER_TEMP/kmedia-wasm-runtime-$VERSION-central.zip" "$RUNNER_TEMP/$name"
+          (cd "$RUNNER_TEMP" && sha256sum "$name" > "$name.sha256")
+          gh release upload "v$VERSION" "$RUNNER_TEMP/$name" "$RUNNER_TEMP/$name.sha256"
       - name: Submit to Central Portal and wait for completion
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
