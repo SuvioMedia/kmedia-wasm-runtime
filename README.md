@@ -34,6 +34,11 @@ the three runtime files. Its real `-sources.jar` contains complete FFmpeg
 source, non-LGPL relinking objects, the dav1d SDK, build recipe, checksums, and
 license material.
 
+The Maven Central workflow retains each signed publication bundle and its
+checksum as uniquely named assets on the corresponding GitHub release before
+submitting it. This required evidence does not use Actions artifact storage,
+and publication retries do not replace earlier bundles.
+
 ## Rebuild the native runtime
 
 Docker is the only additional requirement:

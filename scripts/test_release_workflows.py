@@ -36,7 +36,15 @@ class ReleaseWorkflowTest(unittest.TestCase):
     def test_central_uses_one_protected_approval_before_automatic_publish(self) -> None:
         self.assertIn("environment: maven-central", self.central)
         self.assertIn("default: AUTOMATIC", self.central)
-        self.assertIn("retention-days: 1", self.central)
+        self.assertIn("gh release upload", self.central)
+        self.assertIn("$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT", self.central)
+        self.assertNotIn("--clobber", self.central)
+        self.assertNotIn("actions/upload-artifact", self.central)
+        self.assertNotIn("continue-on-error", self.central)
+        self.assertLess(
+            self.central.index("gh release upload"),
+            self.central.index("Submit to Central Portal"),
+        )
         self.assertIn("for attempt in {1..240}; do", self.central)
         self.assertNotIn("publishAndReleaseToMavenCentral", self.central)
 
